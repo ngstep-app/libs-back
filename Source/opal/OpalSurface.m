@@ -166,7 +166,7 @@ static CGContextRef createCGBitmapContext(int pixelsWide,
   NSLog(@"OpalSurface handleExposeRect: %@ backing=%p x11=%p", NSStringFromRect(rect), _backingCGContext, _x11CGContext);
   NSDebugLLog(@"OpalSurface", @"handleExposeRect %@", NSStringFromRect(rect));
 
-  if (!_backingCGContext)
+  if (!_backingCGContext || !_x11CGContext)
     {
       return;
     }

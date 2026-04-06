@@ -302,35 +302,39 @@ BOOL _cairo_extents_for_NSGlyph(cairo_scaled_font_t *scaled_font, NSGlyph glyph,
 
 - (NSRect) boundingRectForGlyph: (NSGlyph)glyph
 {
-#if 0
-  cairo_text_extents_t ctext;
-
-  if (_cairo_extents_for_NSGlyph(_scaled, glyph, &ctext))
+  // Use glyph advance as approximation for bounding rect
+  CGGlyph cgGlyph = (CGGlyph)glyph;
+  int advance = 0;
+  if (_faceInfo && [_faceInfo fontFace])
     {
-      return NSMakeRect(ctext.x_bearing, ctext.y_bearing,
-                        ctext.width, ctext.height);
+      CGFontGetGlyphAdvances([_faceInfo fontFace], &cgGlyph, 1, &advance);
+      int unitsPerEm = CGFontGetUnitsPerEm([_faceInfo fontFace]);
+      if (unitsPerEm > 0)
+        {
+          CGFloat scale = matrix[0] / (CGFloat)unitsPerEm;
+          CGFloat w = advance * scale;
+          return NSMakeRect(0, descender, w, ascender - descender);
+        }
     }
-#endif
-  return NSMakeRect(0,0,10,10);
+  return NSMakeRect(0, descender, matrix[0] * 0.6, ascender - descender);
 }
 
 - (CGFloat) widthOfString: (NSString *)string
 {
-#if 0
-  cairo_text_extents_t ctext;
+  if (!string || [string length] == 0)
+    return 0.0;
 
-  if (!string)
+  // Sum glyph advances for the string
+  CGFloat totalWidth = 0;
+  NSUInteger len = [string length];
+  for (NSUInteger i = 0; i < len; i++)
     {
-      return 0.0;
+      unichar ch = [string characterAtIndex: i];
+      NSGlyph g = [self glyphForCharacter: ch];
+      NSSize adv = [self advancementForGlyph: g];
+      totalWidth += adv.width;
     }
-
-  cairo_scaled_font_text_extents(_scaled, [string UTF8String], &ctext);
-  if (cairo_scaled_font_status(_scaled) == CAIRO_STATUS_SUCCESS)
-    {
-      return ctext.width;
-    }
-#endif
-  return 100.0;
+  return totalWidth;
 }
 
 - (void) appendBezierPathWithGlyphs: (NSGlyph *)glyphs 

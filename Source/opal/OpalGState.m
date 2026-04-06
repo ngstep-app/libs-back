@@ -29,6 +29,8 @@
 #import <AppKit/NSGraphics.h> // NS*ColorSpace
 #import <AppKit/NSAffineTransform.h>
 #import <AppKit/NSBezierPath.h>
+#import <AppKit/NSGradient.h>
+#import <AppKit/NSColor.h>
 #import "opal/OpalGState.h"
 #import "opal/OpalSurface.h"
 #import "opal/OpalFontInfo.h"
@@ -51,6 +53,32 @@ static inline CGRect _CGRectFromNSRect(NSRect nsrect)
 static inline NSPoint _NSPointFromCGPoint(CGPoint cgpoint)
 {
   return NSMakePoint(cgpoint.x, cgpoint.y);
+}
+
+
+#import <CoreGraphics/CGContext.h>
+
+// Map NSCompositingOperation to CGBlendMode
+static inline CGBlendMode
+_opalBlendModeForOp(NSCompositingOperation op)
+{
+  switch (op)
+    {
+      case NSCompositeClear:           return kCGBlendModeClear;
+      case NSCompositeCopy:            return kCGBlendModeCopy;
+      case NSCompositeSourceOver:      return kCGBlendModeNormal;
+      case NSCompositeSourceIn:        return kCGBlendModeSourceIn;
+      case NSCompositeSourceOut:       return kCGBlendModeSourceOut;
+      case NSCompositeSourceAtop:      return kCGBlendModeSourceAtop;
+      case NSCompositeDestinationOver: return kCGBlendModeDestinationOver;
+      case NSCompositeDestinationIn:   return kCGBlendModeDestinationIn;
+      case NSCompositeDestinationOut:  return kCGBlendModeDestinationOut;
+      case NSCompositeDestinationAtop: return kCGBlendModeDestinationAtop;
+      case NSCompositeXOR:             return kCGBlendModeXOR;
+      case NSCompositePlusDarker:      return kCGBlendModePlusDarker;
+      case NSCompositePlusLighter:     return kCGBlendModePlusLighter;
+      default:                         return kCGBlendModeNormal;
+    }
 }
 
 @implementation OpalGState
@@ -145,6 +173,7 @@ static inline NSPoint _NSPointFromCGPoint(CGPoint cgpoint)
 
 @end
 
+
 @implementation OpalGState (Ops)
 
 - (void) DPSshow: (const char *)s
@@ -166,13 +195,12 @@ static inline NSPoint _NSPointFromCGPoint(CGPoint cgpoint)
   NSDebugLLog(@"OpalGState", @"%p (%@): %s", self, [self class], __PRETTY_FUNCTION__);
   CGContextRef cgctx = CGCTX;
 
-  if (cgctx)
+  if (cgctx && s && length > 0)
     {
-      CGContextSaveGState(cgctx);
-      CGContextSetRGBFillColor(cgctx, 0, 1, 0, 1);
-      CGContextFillRect(cgctx, CGRectMake(0, 0, length * 12, 12));
-      CGContextRestoreGState(cgctx);
-      // TODO: implement!
+      CGPoint pt = CGContextGetPathCurrentPoint(cgctx);
+      pt.y += [self->font defaultLineHeightForFont] * 0.3;
+      CGContextSetTextPosition(cgctx, pt.x, pt.y);
+      CGContextShowText(cgctx, s, length);
     }
 }
 
@@ -215,8 +243,8 @@ static inline NSPoint _NSPointFromCGPoint(CGPoint cgpoint)
         }
 
       CGPoint pt = CGContextGetPathCurrentPoint(cgctx);
-      // FIXME: why?
-      pt.y += [self->font defaultLineHeightForFont] * 0.5;
+      // Offset Y to account for flipped coordinate system
+      pt.y += [self->font defaultLineHeightForFont] * 0.3;
       CGContextSetTextPosition(cgctx, pt.x, pt.y);
       CGContextShowGlyphsWithAdvances(cgctx, cgglyphs, (const CGSize *)advances,
                                       length);
@@ -734,8 +762,79 @@ static inline NSPoint _NSPointFromCGPoint(CGPoint cgpoint)
 
 - (NSDictionary *) GSReadRect: (NSRect)r
 {
-  NSDebugLLog(@"OpalGState", @"%p (%@): %s", self, [self class], __PRETTY_FUNCTION__);
-  return nil;
+  NSDebugLLog(@"OpalGState", @"%p (%@): %s - %@", self, [self class], __PRETTY_FUNCTION__, NSStringFromRect(r));
+
+  CGContextRef ctx = CGCTX;
+  if (!ctx) return nil;
+
+  int x = (int)r.origin.x;
+  int y = (int)r.origin.y;
+  int w = (int)r.size.width;
+  int h = (int)r.size.height;
+  if (w <= 0 || h <= 0) return nil;
+
+  // Create a temporary bitmap context to read pixels into
+  CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+  CGContextRef tmpCtx = CGBitmapContextCreate(NULL, w, h, 8, w * 4, cs,
+      kCGBitmapByteOrder32Host | kCGImageAlphaPremultipliedFirst);
+  CGColorSpaceRelease(cs);
+  if (!tmpCtx) return nil;
+
+  // Get image from the backing context
+  CGImageRef img = CGBitmapContextCreateImage(ctx);
+  if (!img) { CGContextRelease(tmpCtx); return nil; }
+
+  // Flip Y coordinate for the source rect (CGImage is top-down)
+  CGFloat ctxHeight = [_opalSurface size].height;
+  CGRect srcRect = CGRectMake(x, ctxHeight - y - h, w, h);
+  CGImageRef subImg = CGImageCreateWithImageInRect(img, srcRect);
+  CGImageRelease(img);
+  if (!subImg) { CGContextRelease(tmpCtx); return nil; }
+
+  // Draw into temp context
+  CGContextDrawImage(tmpCtx, CGRectMake(0, 0, w, h), subImg);
+  CGImageRelease(subImg);
+
+  // Extract pixel data
+  unsigned char *srcData = (unsigned char *)CGBitmapContextGetData(tmpCtx);
+  if (!srcData) { CGContextRelease(tmpCtx); return nil; }
+
+  // Convert from BGRA premultiplied to RGBA non-premultiplied
+  NSMutableData *data = [NSMutableData dataWithLength: w * h * 4];
+  unsigned char *dst = [data mutableBytes];
+  for (int row = 0; row < h; row++)
+    {
+      unsigned char *s = srcData + row * w * 4;
+      unsigned char *d = dst + row * w * 4;
+      for (int col = 0; col < w; col++)
+        {
+          // BGRA premul -> RGBA
+          unsigned char b = s[col*4+0];
+          unsigned char g = s[col*4+1];
+          unsigned char r = s[col*4+2];
+          unsigned char a = s[col*4+3];
+          d[col*4+0] = r;
+          d[col*4+1] = g;
+          d[col*4+2] = b;
+          d[col*4+3] = a;
+        }
+    }
+
+  CGContextRelease(tmpCtx);
+
+  NSAffineTransform *matrix = [NSAffineTransform transform];
+  NSDictionary *dict = [NSDictionary dictionaryWithObjectsAndKeys:
+    data, @"Data",
+    [NSNumber numberWithInt: 8], @"BitsPerSample",
+    [NSNumber numberWithInt: 4], @"SamplesPerPixel",
+    [NSNumber numberWithBool: YES], @"HasAlpha",
+    [NSValue valueWithSize: NSMakeSize(w, h)], @"Size",
+    NSCalibratedRGBColorSpace, @"ColorSpace",
+    matrix, @"Matrix",
+    [NSNumber numberWithInt: 0], @"BitmapFormat",
+    nil];
+
+  return dict;
 }
 
 - (void) DPSimage: (NSAffineTransform *)matrix
@@ -836,15 +935,19 @@ static inline NSPoint _NSPointFromCGPoint(CGPoint cgpoint)
   NSDebugLLog(@"OpalGState", @"Source cgctx: %p, self: %p - from %@ to %@ with ctm %@", [source CGContext], self, _CGRectRepr(srcCGRect), _CGRectRepr(destCGRect), [self GSCurrentCTM]);
   // FIXME: this presumes that the backing CGContext of 'source' is
   // an OpalSurface with a backing CGBitmapContext
-  CGImageRef backingImage = CGBitmapContextCreateImage([source CGContext]);
+  CGContextRef srcCtx = [source CGContext];
+  if (!srcCtx) return;
+  CGImageRef backingImage = CGBitmapContextCreateImage(srcCtx);
+  if (!backingImage) return;
   CGImageRef subImage = CGImageCreateWithImageInRect(backingImage, srcCGRect);
 
   CGContextSaveGState(destCGContext);
   OPContextSetIdentityCTM(destCGContext);
   OPContextSetCairoDeviceOffset(destCGContext, 0, 0);
 
-  // TODO: this ignores op
-  // TODO: this ignores delta
+  // Apply compositing operation and alpha
+  CGContextSetBlendMode(destCGContext, _opalBlendModeForOp(op));
+  CGContextSetAlpha(destCGContext, delta);
   CGContextDrawImage(destCGContext, destCGRect, subImage);
 
   OPContextSetCairoDeviceOffset(CGCTX, -offset.x,
@@ -907,11 +1010,17 @@ doesn't support to use the receiver cairo target as the source. */
                                 srcRect.size.width, srcRect.size.height);
   CGRect destCGRect = CGRectMake(destPoint.x, destPoint.y,
                                  srcRect.size.width, srcRect.size.height);
-  CGImageRef backingImage = CGBitmapContextCreateImage([source CGContext]);
+  CGContextRef srcCtx = [source CGContext];
+  if (!srcCtx) return;
+  CGImageRef backingImage = CGBitmapContextCreateImage(srcCtx);
+  if (!backingImage) return;
   CGImageRef subImage = CGImageCreateWithImageInRect(backingImage, srcCGRect);
-  // TODO: this ignores op
-  // TODO: this ignores delta
+  // Apply compositing operation and alpha
+  CGContextSaveGState(destCGContext);
+  CGContextSetBlendMode(destCGContext, _opalBlendModeForOp(op));
+  CGContextSetAlpha(destCGContext, delta);
   CGContextDrawImage(destCGContext, destCGRect, subImage);
+  CGContextRestoreGState(destCGContext);
   CGImageRelease(subImage);
   CGImageRelease(backingImage);
 }
@@ -949,7 +1058,7 @@ doesn't support to use the receiver cairo target as the source. */
     {
       CGContextSaveGState(cgctx);
       OPContextSetIdentityCTM(cgctx);
-      // FIXME: Set operator
+      CGContextSetBlendMode(cgctx, _opalBlendModeForOp(op));
       CGContextFillRect(cgctx,
                         CGRectMake(aRect.origin.x,
                                    [_opalSurface size].height -  aRect.origin.y,
@@ -962,6 +1071,7 @@ doesn't support to use the receiver cairo target as the source. */
 
 // MARK: Initialization methods
 // MARK: -
+
 
 @implementation OpalGState (InitializationMethods)
 
@@ -1024,6 +1134,7 @@ doesn't support to use the receiver cairo target as the source. */
 // MARK: Accessors
 // MARK: -
 
+
 @implementation OpalGState (Accessors)
 
 - (CGContextRef) CGContext
@@ -1060,6 +1171,7 @@ doesn't support to use the receiver cairo target as the source. */
 
 // MARK: Non-required methods
 // MARK: -
+
 @implementation OpalGState (NonrequiredMethods)
 
 - (void) DPSgsave
@@ -1081,6 +1193,7 @@ doesn't support to use the receiver cairo target as the source. */
 }
 
 @end
+
 
 @implementation OpalGState (PatternColor)
 
@@ -1105,24 +1218,64 @@ doesn't support to use the receiver cairo target as the source. */
 }
 
 
-// Gradient rendering - stub implementations to prevent crashes
+// Gradient rendering using CoreGraphics CGGradient API
 - (void) drawGradient: (NSGradient*)gradient
             fromPoint: (NSPoint)startPoint
               toPoint: (NSPoint)endPoint
               options: (NSUInteger)options
 {
-  // TODO: Implement using CGGradientCreateWithColorComponents + CGContextDrawLinearGradient
-  NSLog(@"OpalGState: drawGradient (linear) - stub, drawing fallback fill");
+  CGContextRef ctx = CGCTX;
+  if (!ctx || !gradient) return;
 
-  // Fallback: fill with the first color of the gradient
-  CGContextRef ctx = [self CGContext];
-  if (ctx && gradient)
+  NSInteger stops = [gradient numberOfColorStops];
+  if (stops == 0) return;
+
+  CGFloat *components = malloc(sizeof(CGFloat) * stops * 4);
+  CGFloat *locations = malloc(sizeof(CGFloat) * stops);
+  if (!components || !locations) { free(components); free(locations); return; }
+
+  for (int i = 0; i < stops; i++)
     {
-      NSColor *color = [gradient interpolatedColorAtLocation: 0.0];
-      CGFloat r, g, b, a;
-      [[color colorUsingColorSpaceName: NSCalibratedRGBColorSpace]
-          getRed: &r green: &g blue: &b alpha: &a];
-      CGContextSetRGBFillColor(ctx, r, g, b, a);
+      NSColor *color;
+      CGFloat location;
+      [gradient getColor: &color location: &location atIndex: i];
+      NSColor *rgb = [color colorUsingColorSpaceName: NSCalibratedRGBColorSpace];
+      if (rgb)
+        {
+          components[i*4+0] = [rgb redComponent];
+          components[i*4+1] = [rgb greenComponent];
+          components[i*4+2] = [rgb blueComponent];
+          components[i*4+3] = [rgb alphaComponent];
+        }
+      else
+        {
+          // Fallback for non-RGB colors
+          CGFloat w = [color whiteComponent];
+          components[i*4+0] = w;
+          components[i*4+1] = w;
+          components[i*4+2] = w;
+          components[i*4+3] = [color alphaComponent];
+        }
+      locations[i] = location;
+    }
+
+  CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+  CGGradientRef grad = CGGradientCreateWithColorComponents(cs, components, locations, stops);
+  CGColorSpaceRelease(cs);
+  free(components);
+  free(locations);
+
+  if (grad)
+    {
+      // CGContext already applies CTM to gradient coordinates,
+      // so pass them in user space without manual transform.
+      CGContextSaveGState(ctx);
+      CGContextDrawLinearGradient(ctx, grad,
+          CGPointMake(startPoint.x, startPoint.y),
+          CGPointMake(endPoint.x, endPoint.y),
+          (CGGradientDrawingOptions)options);
+      CGContextRestoreGState(ctx);
+      CGGradientRelease(grad);
     }
 }
 
@@ -1133,8 +1286,57 @@ doesn't support to use the receiver cairo target as the source. */
                radius: (CGFloat)endRadius
               options: (NSUInteger)options
 {
-  // TODO: Implement using CGGradientCreateWithColorComponents + CGContextDrawRadialGradient
-  NSLog(@"OpalGState: drawGradient (radial) - stub");
+  CGContextRef ctx = CGCTX;
+  if (!ctx || !gradient) return;
+
+  NSInteger stops = [gradient numberOfColorStops];
+  if (stops == 0) return;
+
+  CGFloat *components = malloc(sizeof(CGFloat) * stops * 4);
+  CGFloat *locations = malloc(sizeof(CGFloat) * stops);
+  if (!components || !locations) { free(components); free(locations); return; }
+
+  for (int i = 0; i < stops; i++)
+    {
+      NSColor *color;
+      CGFloat location;
+      [gradient getColor: &color location: &location atIndex: i];
+      NSColor *rgb = [color colorUsingColorSpaceName: NSCalibratedRGBColorSpace];
+      if (rgb)
+        {
+          components[i*4+0] = [rgb redComponent];
+          components[i*4+1] = [rgb greenComponent];
+          components[i*4+2] = [rgb blueComponent];
+          components[i*4+3] = [rgb alphaComponent];
+        }
+      else
+        {
+          CGFloat w = [color whiteComponent];
+          components[i*4+0] = w;
+          components[i*4+1] = w;
+          components[i*4+2] = w;
+          components[i*4+3] = [color alphaComponent];
+        }
+      locations[i] = location;
+    }
+
+  CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+  CGGradientRef grad = CGGradientCreateWithColorComponents(cs, components, locations, stops);
+  CGColorSpaceRelease(cs);
+  free(components);
+  free(locations);
+
+  if (grad)
+    {
+      // CGContext already applies CTM to gradient coordinates
+      CGContextSaveGState(ctx);
+      CGContextDrawRadialGradient(ctx, grad,
+          CGPointMake(startCenter.x, startCenter.y), startRadius,
+          CGPointMake(endCenter.x, endCenter.y), endRadius,
+          (CGGradientDrawingOptions)options);
+      CGContextRestoreGState(ctx);
+      CGGradientRelease(grad);
+    }
 }
 
 @end

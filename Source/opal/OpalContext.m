@@ -143,17 +143,15 @@
       return NO;
     }
 
-  // FIXME: Allow more image types as soon as the Opal backend handles them correctly
   colorSpaceName = [bitmap colorSpaceName];
-  if (![colorSpaceName isEqualToString: NSDeviceRGBColorSpace] &&
-      ![colorSpaceName isEqualToString: NSCalibratedRGBColorSpace])
-    {
-      return NO;
-    }
-  else
+  if ([colorSpaceName isEqualToString: NSDeviceRGBColorSpace] ||
+      [colorSpaceName isEqualToString: NSCalibratedRGBColorSpace] ||
+      [colorSpaceName isEqualToString: NSDeviceWhiteColorSpace] ||
+      [colorSpaceName isEqualToString: NSCalibratedWhiteColorSpace])
     {
       return YES;
     }
+  return NO;
 }
 
 - (void) GSCurrentDevice: (void **)device : (int *)x : (int *)y
