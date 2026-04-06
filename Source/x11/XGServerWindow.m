@@ -3709,6 +3709,15 @@ swapColors(unsigned char *image_data, NSBitmapImageRep *rep)
         }
     }
 
+  if (window->gdriver == NULL && window->ident != 0)
+    {
+      NSGraphicsContext *ctxt = GSCurrentContext();
+      if (ctxt != nil)
+        {
+          [self setWindowdevice: win forContext: ctxt];
+        }
+    }
+
   if (!ignoreBacking && window->type != NSBackingStoreNonretained)
     {
       XGCValues values;

@@ -31,6 +31,8 @@
 #import <AppKit/NSBezierPath.h>
 #import <AppKit/NSGradient.h>
 #import <AppKit/NSColor.h>
+#import <AppKit/NSGradient.h>
+#import <AppKit/NSColor.h>
 #import "opal/OpalGState.h"
 #import "opal/OpalSurface.h"
 #import "opal/OpalFontInfo.h"
@@ -132,13 +134,16 @@ _opalBlendModeForOp(NSCompositingOperation op)
 
       if (color->space == gray_colorspace)
         {
+          // Use RGB path for gray colors to ensure consistent text rendering
+          CGFloat gray = color->field[0];
+          CGFloat alpha = color->field[AINDEX];
           if (cState & COLOR_STROKE)
             {
-              CGContextSetGrayStrokeColor(cgctx, color->field[0], color->field[AINDEX]);
+              CGContextSetRGBStrokeColor(cgctx, gray, gray, gray, alpha);
             }
           if (cState & COLOR_FILL)
             {
-              CGContextSetGrayFillColor(cgctx, color->field[0], color->field[AINDEX]);
+              CGContextSetRGBFillColor(cgctx, gray, gray, gray, alpha);
             }
         }
       else if (color->space == rgb_colorspace)
