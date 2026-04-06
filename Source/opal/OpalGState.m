@@ -1104,4 +1104,37 @@ doesn't support to use the receiver cairo target as the source. */
   free(savedClip);
 }
 
+
+// Gradient rendering - stub implementations to prevent crashes
+- (void) drawGradient: (NSGradient*)gradient
+            fromPoint: (NSPoint)startPoint
+              toPoint: (NSPoint)endPoint
+              options: (NSUInteger)options
+{
+  // TODO: Implement using CGGradientCreateWithColorComponents + CGContextDrawLinearGradient
+  NSLog(@"OpalGState: drawGradient (linear) - stub, drawing fallback fill");
+
+  // Fallback: fill with the first color of the gradient
+  CGContextRef ctx = [self CGContext];
+  if (ctx && gradient)
+    {
+      NSColor *color = [gradient interpolatedColorAtLocation: 0.0];
+      CGFloat r, g, b, a;
+      [[color colorUsingColorSpaceName: NSCalibratedRGBColorSpace]
+          getRed: &r green: &g blue: &b alpha: &a];
+      CGContextSetRGBFillColor(ctx, r, g, b, a);
+    }
+}
+
+- (void) drawGradient: (NSGradient*)gradient
+           fromCenter: (NSPoint)startCenter
+               radius: (CGFloat)startRadius
+             toCenter: (NSPoint)endCenter
+               radius: (CGFloat)endRadius
+              options: (NSUInteger)options
+{
+  // TODO: Implement using CGGradientCreateWithColorComponents + CGContextDrawRadialGradient
+  NSLog(@"OpalGState: drawGradient (radial) - stub");
+}
+
 @end

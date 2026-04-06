@@ -940,6 +940,22 @@ posixFileDescriptor: (NSPosixFileDescriptor*)fileDescriptor
 
         if (cWin != 0)
           {
+            /* If no graphics driver attached yet, create the surface now.
+             * This is critical for the opal backend where the surface
+             * only gets created via GSSetDevice, which requires
+             * setWindowdevice to be called. Without this, opal windows
+             * never render because _processResizeEvent never fires.
+             */
+            if (cWin->gdriver == NULL && cWin->ident != 0)
+              {
+                NSGraphicsContext *ctxt = GSCurrentContext();
+                if (ctxt != nil)
+                  {
+                    NSLog(@"ConfigureNotify: creating surface for window %lu", cWin->number);
+                    [self setWindowdevice: cWin->number forContext: ctxt];
+                  }
+              }
+
             NSRect r, x, n, h;
             NSTimeInterval ts = (NSTimeInterval)generic.lastMotion;
 
@@ -1454,6 +1470,17 @@ posixFileDescriptor: (NSPosixFileDescriptor*)fileDescriptor
         if (cWin != 0)
           {
             cWin->map_state = IsViewable;
+
+            /* Create surface on first map if not yet created */
+            if (cWin->gdriver == NULL && cWin->ident != 0)
+              {
+                NSGraphicsContext *ctxt = GSCurrentContext();
+                if (ctxt != nil)
+                  {
+                    NSLog(@"MapNotify: creating surface for window %lu", cWin->number);
+                    [self setWindowdevice: cWin->number forContext: ctxt];
+                  }
+              }
             /*
              * if the window that was just mapped wants the input
              * focus, re-do the request.

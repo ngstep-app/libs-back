@@ -119,7 +119,7 @@ static CGContextRef createCGBitmapContext(int pixelsWide,
       _backingCGContext = createCGBitmapContext(pixelsWide, pixelsHigh);
     }
 
-  NSDebugLLog(@"OpalSurface", @"Created CGContexts: X11=%p, backing=%p, width=%d height=%d",
+  NSLog(@"OpalSurface Created CGContexts: X11=%p, backing=%p, width=%d height=%d",
               _x11CGContext, _backingCGContext, pixelsWide, pixelsHigh);
 
 }
@@ -163,6 +163,7 @@ static CGContextRef createCGBitmapContext(int pixelsWide,
 
 - (void) handleExposeRect: (NSRect)rect
 {
+  NSLog(@"OpalSurface handleExposeRect: %@ backing=%p x11=%p", NSStringFromRect(rect), _backingCGContext, _x11CGContext);
   NSDebugLLog(@"OpalSurface", @"handleExposeRect %@", NSStringFromRect(rect));
 
   if (!_backingCGContext)

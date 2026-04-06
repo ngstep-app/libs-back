@@ -951,6 +951,13 @@ _get_next_prop_new_event(Display *display, XEvent *event, char *arg)
       // _NET_REQUEST_FRAME_EXTENTS
       [self orderwindow: NSWindowAbove : 0 : window->number];
 
+      /* Ensure the window has visible content by clearing it.
+       * This is needed for backends (like opal) that don't attach
+       * an X11 surface until GSSetDevice is called. Without content,
+       * the X server may not generate VisibilityNotify.
+       */
+      XClearWindow(dpy, window->ident);
+      XFlush(dpy);
       XSync(dpy, False);
       while (XPending(dpy) > 0 || window->visibility > 1)
         {
@@ -958,15 +965,11 @@ _get_next_prop_new_event(Display *display, XEvent *event, char *arg)
             {
               NSDate	*until;
 
-              /* In theory, after executing XSync() all events resulting from
-               * our window creation and ordering front should be available in
-               * the X event queue.
-               * However, it's possible that a window manager
-               * could send some events after the XSync() has been satisfied,
-               * so if we have not received a visibility notification
-               * we can wait for up to a second for more events.
+              /* Wait briefly for visibility notification.
+               * Reduced from 1.0s to 0.1s - if the window isn't visible
+               * by now, it won't become visible (e.g. no window manager).
                */
-              until = [NSDate dateWithTimeIntervalSinceNow: 1.0];
+              until = [NSDate dateWithTimeIntervalSinceNow: 0.1];
               while (XPending(dpy) == 0 && [until timeIntervalSinceNow] > 0.0)
                 {
                   CREATE_AUTORELEASE_POOL(pool);
@@ -978,8 +981,8 @@ _get_next_prop_new_event(Display *display, XEvent *event, char *arg)
                 }
               if (XPending(dpy) == 0)
                 {
-                  NSLog(@"Waited for a second, but the X system never"
-                        @" made the window visible");
+                  NSDebugLLog(@"Offset", @"No visibility notification"
+                        @" for probe window - using default offsets");
                   break;
                 }
             }
@@ -2861,6 +2864,7 @@ swapColors(unsigned char *image_data, NSBitmapImageRep *rep)
 
 - (void) orderwindow: (int)op : (int)otherWin : (int)winNum
 {
+  NSLog(@"orderwindow: op=%d otherWin=%d winNum=%d", op, otherWin, winNum);
   gswindow_device_t	*window;
   gswindow_device_t	*other;
   int		level;
@@ -3088,6 +3092,21 @@ swapColors(unsigned char *image_data, NSBitmapImageRep *rep)
 	      CWStackMode, &chg);
 	  }
 	XMapWindow(dpy, window->ident);
+	/* Ensure the window has a graphics context/surface attached.
+	 * This is critical for backends like opal that don't create
+	 * their surface until GSSetDevice is called. Without this,
+	 * the window maps but has no drawing surface, so expose events
+	 * produce no visible content.
+	 */
+	NSLog(@"orderwindow: gdriver=%p ctxt=%p winNum=%d", window->gdriver, GSCurrentContext(), window->number);
+	if (window->gdriver == NULL)
+	  {
+	    NSGraphicsContext *ctxt = GSCurrentContext();
+	    if (ctxt != nil)
+	      {
+	        [self setWindowdevice: window->number forContext: ctxt];
+	      }
+	  }
 	break;
 
       case NSWindowOut:
@@ -3676,6 +3695,19 @@ swapColors(unsigned char *image_data, NSBitmapImageRep *rep)
   window = WINDOW_WITH_TAG(win);
   if (!window)
     return;
+
+  /* If no graphics driver is attached to this window yet, create one.
+   * This is needed for the opal backend which only creates its surface
+   * in GSSetDevice, which may not have been called yet.
+   */
+  if (window->gdriver == NULL && window->ident != 0)
+    {
+      NSGraphicsContext *ctxt = GSCurrentContext();
+      if (ctxt != nil)
+        {
+          [self setWindowdevice: win forContext: ctxt];
+        }
+    }
 
   if (!ignoreBacking && window->type != NSBackingStoreNonretained)
     {

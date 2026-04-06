@@ -45,6 +45,7 @@
 
 + (void) initializeBackend
 {
+  NSLog(@"OpalContext: initializeBackend called");
   [NSGraphicsContext setDefaultContextClass: self];
 
   [GSFontEnumerator setDefaultClass: [OpalFontEnumerator class]];
@@ -63,16 +64,8 @@
 
 - (BOOL) isDrawingToScreen
 {
-#warning isDrawingToScreen returning NO to fix DPSimage
-  return NO;
-
-  // NOTE: This was returning NO because it was not looking at the
-  // return value of GSCurrentSurface. Now it returns YES, which
-  // seems to have broken image drawing (yellow rectangles are drawn instead)
   OpalSurface *surface;
-
   [OGSTATE GSCurrentSurface: &surface : NULL : NULL];
-
   return [surface isDrawingToScreen];
 }
 
@@ -175,6 +168,7 @@
 }
 
 - (void) GSSetDevice: (void *)device
+
                     : (int)x
                     : (int)y
 {
