@@ -171,6 +171,8 @@ static CGContextRef createCGBitmapContext(int pixelsWide,
       return;
     }
 
+  // Flush backing context to ensure all drawing is committed
+  CGContextFlush(_backingCGContext);
   CGImageRef backingImage = CGBitmapContextCreateImage(_backingCGContext);
   if (!backingImage) // FIXME: writing a nil image fails with Opal
     return;
@@ -192,6 +194,7 @@ static CGContextRef createCGBitmapContext(int pixelsWide,
 
 
   CGContextDrawImage(_x11CGContext, cgRect, subImage);
+  CGContextFlush(_x11CGContext);
 
 #if 0
 #warning Saving debug images
