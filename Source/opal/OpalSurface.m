@@ -27,10 +27,15 @@
 
 #import "opal/OpalSurface.h"
 #import "x11/XGServerWindow.h"
+#include <cairo/cairo.h>
 
 /* TODO: expose these from within opal */
 extern CGContextRef OPX11ContextCreate(Display *display, Drawable drawable);
 extern void OPContextSetSize(CGContextRef ctx, CGSize s);
+
+/* Accessors defined in libs-opal to get underlying cairo objects */
+extern cairo_t *OPContextGetCairoContext(CGContextRef ctx);
+extern cairo_surface_t *OPX11ContextGetXlibSurface(CGContextRef ctx);
 
 /* Taken from GSQuartzCore's CABackingStore */
 static CGContextRef createCGBitmapContext(int pixelsWide,
@@ -163,7 +168,6 @@ static CGContextRef createCGBitmapContext(int pixelsWide,
 
 - (void) handleExposeRect: (NSRect)rect
 {
-  NSLog(@"OpalSurface handleExposeRect: %@ backing=%p x11=%p", NSStringFromRect(rect), _backingCGContext, _x11CGContext);
   NSDebugLLog(@"OpalSurface", @"handleExposeRect %@", NSStringFromRect(rect));
 
   if (!_backingCGContext || !_x11CGContext)
@@ -171,40 +175,54 @@ static CGContextRef createCGBitmapContext(int pixelsWide,
       return;
     }
 
-  // Flush backing context to ensure all drawing is committed
-  CGContextFlush(_backingCGContext);
-  CGImageRef backingImage = CGBitmapContextCreateImage(_backingCGContext);
-  if (!backingImage) // FIXME: writing a nil image fails with Opal
+  /* Use raw cairo to blit backing surface to X11 window surface,
+   * matching how XGCairoModernSurface.handleExposeRect works.
+   * This completely bypasses CGContext state (CTM, clip, gstate stack)
+   * which can be corrupted by degenerate matrices or transparency layers.
+   *
+   * CRITICAL: We use OPX11ContextGetXlibSurface() to get the ORIGINAL
+   * xlib surface, NOT cairo_get_target() which returns a group surface
+   * if cairo_push_group was called (transparency layers/compositing).
+   * The backing bitmap context never has push_group so cairo_get_target
+   * is safe for it. */
+  cairo_t *backingCairo = OPContextGetCairoContext(_backingCGContext);
+  if (!backingCairo)
     return;
 
-  CGRect cgRect = CGRectMake(rect.origin.x, rect.origin.y,
-                      rect.size.width, rect.size.height);
-  cgRect = CGRectIntegral(cgRect);
-  cgRect = CGRectIntersection(cgRect, CGRectMake(0, 0, CGImageGetWidth(backingImage), CGImageGetHeight(backingImage)));
+  cairo_surface_t *backingSurface = cairo_get_target(backingCairo);
+  cairo_surface_t *x11Surface = OPX11ContextGetXlibSurface(_x11CGContext);
+  if (!backingSurface || !x11Surface)
+    return;
 
-  CGRect subimageCGRect = cgRect;
-  CGImageRef subImage = CGImageCreateWithImageInRect(backingImage, subimageCGRect);
+  /* Create a fresh cairo context directly on the xlib surface.
+   * Fresh cairo_t = identity transform, no clips, no push_group. */
+  cairo_t *windowCtx = cairo_create(x11Surface);
 
-  CGContextSaveGState(_x11CGContext);
-  OPContextResetClip(_x11CGContext);
-  OPContextSetIdentityCTM(_x11CGContext);
+  /* Temporarily clear device offset on backing surface so we work
+   * with raw X11 pixel coordinates (matching Cairo backend pattern). */
+  double backupOffsetX, backupOffsetY;
+  cairo_surface_get_device_offset(backingSurface, &backupOffsetX, &backupOffsetY);
+  cairo_surface_set_device_offset(backingSurface, 0, 0);
 
-  cgRect.origin.y = [self size].height - cgRect.origin.y - cgRect.size.height;
-  NSDebugLLog(@"OpalSurface", @" ... actually from %@ to %@", NSStringFromRect(*(NSRect *)&subimageCGRect), NSStringFromRect(*(NSRect *)&cgRect));
+  /* Flush backing surface to commit all pending cairo drawing ops. */
+  cairo_surface_flush(backingSurface);
 
+  /* Clip to exposed rectangle and blit from backing to window. */
+  cairo_rectangle(windowCtx, rect.origin.x, rect.origin.y,
+                  rect.size.width, rect.size.height);
+  cairo_clip(windowCtx);
+  cairo_set_source_surface(windowCtx, backingSurface, 0, 0);
+  cairo_set_operator(windowCtx, CAIRO_OPERATOR_SOURCE);
+  cairo_paint(windowCtx);
 
-  CGContextDrawImage(_x11CGContext, cgRect, subImage);
+  /* cairo_destroy implicitly flushes drawing to the surface. */
+  cairo_destroy(windowCtx);
+
+  /* Restore device offset on backing surface. */
+  cairo_surface_set_device_offset(backingSurface, backupOffsetX, backupOffsetY);
+
+  /* Flush the X11 surface and display connection. */
   CGContextFlush(_x11CGContext);
-
-#if 0
-#warning Saving debug images
-  [self _saveImage: backingImage withPrefix:@"/tmp/opalback-backing-" size: CGSizeZero];
-  [self _saveImage: subImage withPrefix:@"/tmp/opalback-subimage-" size: subimageCGRect.size ];
-#endif
-
-  CGImageRelease(backingImage);
-  CGImageRelease(subImage);
-  CGContextRestoreGState(_x11CGContext);
 }
 
 - (void) _saveImage: (CGImageRef) img withPrefix: (NSString *) prefix size: (CGSize) size

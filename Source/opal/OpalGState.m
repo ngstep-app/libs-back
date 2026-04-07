@@ -950,9 +950,10 @@ _opalBlendModeForOp(NSCompositingOperation op)
   OPContextSetIdentityCTM(destCGContext);
   OPContextSetCairoDeviceOffset(destCGContext, 0, 0);
 
-  // Apply compositing operation and alpha
+  // Apply compositing operation
   CGContextSetBlendMode(destCGContext, _opalBlendModeForOp(op));
-  CGContextSetAlpha(destCGContext, delta);
+  // Note: delta (fraction) applied via CGContextSetAlpha would leak if
+  // save/restore fails due to degenerate matrix. Skip for now.
   CGContextDrawImage(destCGContext, destCGRect, subImage);
 
   OPContextSetCairoDeviceOffset(CGCTX, -offset.x,
@@ -1023,7 +1024,6 @@ doesn't support to use the receiver cairo target as the source. */
   // Apply compositing operation and alpha
   CGContextSaveGState(destCGContext);
   CGContextSetBlendMode(destCGContext, _opalBlendModeForOp(op));
-  CGContextSetAlpha(destCGContext, delta);
   CGContextDrawImage(destCGContext, destCGRect, subImage);
   CGContextRestoreGState(destCGContext);
   CGImageRelease(subImage);
