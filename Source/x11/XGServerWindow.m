@@ -964,9 +964,13 @@ _get_next_prop_new_event(Display *display, XEvent *event, char *arg)
                * However, it's possible that a window manager
                * could send some events after the XSync() has been satisfied,
                * so if we have not received a visibility notification
-               * we can wait for up to a second for more events.
+               * we can wait briefly for more events.  Reduced from 1.0s
+               * because on WMs that don't advertise
+               * _NET_REQUEST_FRAME_EXTENTS, this loop runs 15 times at
+               * app startup (once per window style), and 1.0s per style
+               * made every GNUstep app take ~15s to launch.
                */
-              until = [NSDate dateWithTimeIntervalSinceNow: 1.0];
+              until = [NSDate dateWithTimeIntervalSinceNow: 0.1];
               while (XPending(dpy) == 0 && [until timeIntervalSinceNow] > 0.0)
                 {
                   CREATE_AUTORELEASE_POOL(pool);
